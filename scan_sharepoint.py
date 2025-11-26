@@ -14,6 +14,7 @@ from metadata_db import init_db, upsert_file, should_update
 from logger_db import init_logs, write_log
 from generate_report import generate_summary
 from send_email import send_report
+from metadata_db import fetch_all_rows, fetch_recent_items
 import time
 
 GRAPH = "https://graph.microsoft.com/v1.0"
@@ -132,7 +133,11 @@ def run_scan():
         print("Scan complete. Metadata updated.")
 
         # ⭐ ALWAYS SEND EMAIL (your request)
-        summary = generate_summary()
+        # Example: fetch rows and recent items from metadata_db
+        rows = fetch_all_rows()           # should return list of dicts (id,name,size,is_folder,...)
+        recent_items = fetch_recent_items(limit=10)  # list of dicts with 'name' and 'modified'
+        summary = generate_summary(rows=rows, recent_items=recent_items)
+
         send_report(EMAIL_TARGET, EMAIL_SUBJECT, summary)
         write_log("INFO", "Email sent (forced mode).")
 

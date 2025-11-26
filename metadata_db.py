@@ -1,14 +1,17 @@
+# metadata_db.py
 import sqlite3
 import os
-import datetime
 
-DB_PATH = "sharepoint_metadata.db"
+DB_NAME = "sharepoint_metadata.db"
+
+def get_conn():
+    return sqlite3.connect(DB_NAME)
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS files (
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS metadata (
             id TEXT PRIMARY KEY,
             name TEXT,
             webUrl TEXT,
@@ -16,21 +19,20 @@ def init_db():
             is_folder INTEGER,
             created TEXT,
             modified TEXT,
-            size INTEGER,
-            last_seen TEXT
+            size INTEGER
         )
     """)
     conn.commit()
     conn.close()
 
-def upsert_file(info):
-    conn = sqlite3.connect(DB_PATH)
+
+def upsert_file(record):
+    conn = get_conn()
     cur = conn.cursor()
-    now = datetime.datetime.now().isoformat()
 
     cur.execute("""
-        INSERT INTO files (id, name, webUrl, path, is_folder, created, modified, size, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO metadata(id, name, webUrl, path, is_folder, created, modified, size)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name,
             webUrl=excluded.webUrl,
@@ -38,47 +40,96 @@ def upsert_file(info):
             is_folder=excluded.is_folder,
             created=excluded.created,
             modified=excluded.modified,
-            size=excluded.size,
-            last_seen=excluded.last_seen
+            size=excluded.size
     """, (
-        info.get("id"),
-        info.get("name"),
-        info.get("webUrl"),
-        info.get("path"),
-        info.get("is_folder"),
-        info.get("created"),
-        info.get("modified"),
-        info.get("size"),
-        now
+        record["id"],
+        record["name"],
+        record["webUrl"],
+        record["path"],
+        record["is_folder"],
+        record["created"],
+        record["modified"],
+        record["size"]
     ))
 
     conn.commit()
     conn.close()
 
-def should_update(item_id, new_modified):
-    conn = sqlite3.connect(DB_PATH)
+
+def should_update(file_id, modified):
+    conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT modified FROM files WHERE id=?", (item_id,))
+    cur.execute("SELECT modified FROM metadata WHERE id = ?", (file_id,))
     row = cur.fetchone()
     conn.close()
 
     if row is None:
-        return True
-    old_modified = row[0]
-    if old_modified is None:
-        return True
-    return new_modified > old_modified
+        return True  # new file
+    return row[0] != modified  # changed timestamp
 
-def export_csv(path="metadata_export.csv"):
-    conn = sqlite3.connect(DB_PATH)
+
+# -------------------------------------------------------------------------
+# ⭐ ADDED NOW — These were missing earlier
+# -------------------------------------------------------------------------
+
+def fetch_all_rows():
+    """Return all file/folder metadata from DB as list of dicts."""
+    conn = get_conn()
     cur = conn.cursor()
-    rows = cur.execute("SELECT * FROM files").fetchall()
+    cur.execute("SELECT id, name, webUrl, path, is_folder, created, modified, size FROM metadata")
+    rows = cur.fetchall()
     conn.close()
 
+    result = []
+    for r in rows:
+        result.append({
+            "id": r[0],
+            "name": r[1],
+            "webUrl": r[2],
+            "path": r[3],
+            "is_folder": r[4],
+            "created": r[5],
+            "modified": r[6],
+            "size": r[7]
+        })
+    return result
+
+
+def fetch_recent_items(limit=10):
+    """Return recently modified files."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT name, modified 
+        FROM metadata 
+        WHERE is_folder = 0 
+        ORDER BY modified DESC 
+        LIMIT ?
+    """, (limit,))
+    rows = cur.fetchall()
+    conn.close()
+
+    result = []
+    for r in rows:
+        result.append({
+            "name": r[0],
+            "modified": r[1]
+        })
+    return result
+def export_csv(file_path="sharepoint_metadata.csv"):
+    """Export metadata table to a CSV file."""
     import csv
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id, name, webUrl, path, is_folder, created, modified, size FROM metadata")
+    rows = cur.fetchall()
+    conn.close()
+
+    with open(file_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            "id","name","webUrl","path","is_folder","created","modified","size","last_seen"
-        ])
+        writer.writerow(["id", "name", "webUrl", "path", "is_folder", "created", "modified", "size"])
         writer.writerows(rows)
+
+    return file_path
+

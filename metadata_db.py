@@ -132,4 +132,17 @@ def export_csv(file_path="sharepoint_metadata.csv"):
         writer.writerows(rows)
 
     return file_path
+def get_all_ids():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM metadata")
+    rows = cur.fetchall()
+    conn.close()
+    return {r[0] for r in rows}
+def delete_record(file_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM metadata WHERE id = ?", (file_id,))
+    conn.commit()
+    conn.close()
 

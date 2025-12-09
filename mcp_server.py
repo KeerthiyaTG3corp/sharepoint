@@ -5,6 +5,7 @@ from metadata_db import export_csv
 from generate_report import generate_summary
 from send_email import send_report
 from logger_db import init_logs
+from metadata_db import fetch_all_rows, fetch_recent_items
 import sqlite3
 
 app = Flask(__name__)
@@ -33,11 +34,26 @@ def metadata():
         "files": result
     })
 
-
 @app.route("/summary", methods=["GET"])
 def summary():
-    report = generate_summary()
+    rows = fetch_all_rows()                     # all files from DB
+    recent = fetch_recent_items(limit=10)       # last 10 updates
+
+    # NEW FIELDS (must match your generate_summary function)
+    new_files = []
+    modified_files = []
+    deleted_files = []
+
+    report = generate_summary(
+        rows=rows,
+        recent_items=recent,
+        new_files=new_files,
+        modified_files=modified_files,
+        deleted_files=deleted_files
+    )
+
     return jsonify({"summary": report})
+
 
 
 @app.route("/export", methods=["POST"])
@@ -57,12 +73,15 @@ def logs():
 
 @app.route("/send_report", methods=["POST"])
 def email_api():
-    report = generate_summary()
+    body = request.get_json()
+    summary = body.get("summary")
+
     send_report(
-        "keerthiyat@g3cyberspace.com",  # your email
+        "keerthiyat@g3cyberspace.com",
         "SharePoint Summary Report",
-        report
+        summary
     )
+
     return jsonify({"status": "sent"})
 
 

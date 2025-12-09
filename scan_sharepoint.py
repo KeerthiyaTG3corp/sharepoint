@@ -1,12 +1,4 @@
 # scan_sharepoint.py
-"""
-FINAL VERSION FOR KEERTHI (UPDATED)
-✔ Scans ROOT of your SharePoint drive
-✔ Recursively scans all folders & files
-✔ No 404 errors
-✔ ALWAYS sends email after scan (even if no changes)
-✔ Works cleanly with MCP server
-"""
 
 import requests
 from auth_delegated import get_access_token
@@ -16,6 +8,8 @@ from generate_report import generate_summary
 from send_email import send_report
 from metadata_db import fetch_all_rows, fetch_recent_items
 import time
+from generate_report import utc_iso_to_ist
+
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 
@@ -110,36 +104,97 @@ def scan_folder(item, parent_path, changes_counter):
         children = get_children(item.get("id"))
         for child in children:
             scan_folder(child, path, changes_counter)
-
-
 def run_scan():
-    """
-    MAIN SCAN PROCESS
-    """
     init_db()
     init_logs()
 
     write_log("INFO", "Scan started.")
     changes_counter = [0]
 
+    new_files = []
+    modified_files = []
+    deleted_files = []
+
+    # Timestamp for deletions
+    from datetime import datetime
+    import pytz
+    ist = pytz.timezone("Asia/Kolkata")
+    scan_time = datetime.now(ist).strftime("%d-%b-%Y %I:%M:%S %p IST")
+
     try:
         items = get_children()
         write_log("INFO", f"Found {len(items)} items in root")
 
+        current_ids = set()
+
+        from metadata_db import get_all_ids, delete_record
+        stored_ids = get_all_ids()
+
+        # ---- PROCESS ALL ITEMS ----
         for item in items:
-            scan_folder(item, "/root", changes_counter)
+            source = resolve_remote_item(item)
+            file_id = source.get("id")
+            name = source.get("name")
+            created_ts = source.get("createdDateTime")
+            modified_ts = source.get("lastModifiedDateTime")
 
-        write_log("INFO", f"Scan complete. Changes found: {changes_counter[0]}")
-        print("Scan complete. Metadata updated.")
+            current_ids.add(file_id)
 
-        # ⭐ ALWAYS SEND EMAIL (your request)
-        # Example: fetch rows and recent items from metadata_db
-        rows = fetch_all_rows()           # should return list of dicts (id,name,size,is_folder,...)
-        recent_items = fetch_recent_items(limit=10)  # list of dicts with 'name' and 'modified'
-        summary = generate_summary(rows=rows, recent_items=recent_items)
+            # NEW FILE
+            if file_id not in stored_ids:
+                new_files.append({
+                    "name": name,
+                    "timestamp": utc_iso_to_ist(created_ts)
+                })
+
+            # MODIFIED FILE
+            elif should_update(file_id, modified_ts):
+                modified_files.append({
+                    "name": name,
+                    "timestamp": utc_iso_to_ist(modified_ts)
+                })
+
+            # ALWAYS update DB
+            upsert_file({
+                "id": file_id,
+                "name": name,
+                "webUrl": source.get("webUrl"),
+                "path": f"/root/{name}",
+                "is_folder": 1 if "folder" in item else 0,
+                "created": created_ts,
+                "modified": modified_ts,
+                "size": int(source.get("size", 0)),
+            })
+
+        # ---- DETECT DELETED FILES ----
+        deleted_ids = stored_ids - current_ids
+
+        for file_id in deleted_ids:
+            deleted_files.append({
+                "name": file_id,
+                "timestamp": scan_time
+            })
+            delete_record(file_id)
+            write_log("INFO", f"DELETED: {file_id}")
+            changes_counter[0] += 1
+
+        # ---- FETCH UPDATED DATA ----
+        rows = fetch_all_rows()
+        recent_items = fetch_recent_items(limit=10)
+
+        # ---- CREATE THE FINAL SUMMARY ----
+        summary = generate_summary(
+            rows=rows,
+            recent_items=recent_items,
+            new_files=new_files,
+            modified_files=modified_files,
+            deleted_files=deleted_files
+        )
 
         send_report(EMAIL_TARGET, EMAIL_SUBJECT, summary)
-        write_log("INFO", "Email sent (forced mode).")
+        write_log("INFO", "Email sent successfully.")
+
+        print("Scan complete. Metadata updated and email sent.")
 
     except Exception as e:
         write_log("ERROR", f"Scan failed: {e}")

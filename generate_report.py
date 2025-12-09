@@ -42,22 +42,16 @@ def utc_iso_to_ist(iso_ts: str) -> str:
         return dt_ist.strftime("%d-%b-%Y %I:%M %p IST")
     except Exception:
         return iso_ts
+def generate_summary(rows=None, recent_items=None,
+                     new_files=None, modified_files=None, deleted_files=None):
 
+    new_files = new_files or []
+    modified_files = modified_files or []
+    deleted_files = deleted_files or []
 
-def generate_summary(rows=None, recent_items=None):
-    """
-    Build a summary string.
-    - rows: optional list of all metadata rows (for counts)
-    - recent_items: optional list of dicts with keys 'name' and 'modified' for recents
-    If you call this without args, ensure callers pass correct data or this function
-    is adapted to read DB directly.
-    """
-
-    # Current time in IST for "Generated"
     ist = pytz.timezone("Asia/Kolkata")
     now_ist = datetime.now(ist).strftime("%d-%b-%Y %I:%M:%S %p IST")
 
-    # Safe defaults if not provided
     rows = rows or []
     recent_items = recent_items or []
 
@@ -65,30 +59,36 @@ def generate_summary(rows=None, recent_items=None):
     folder_count = sum(1 for r in rows if r.get("is_folder"))
     file_count = total_items - folder_count
 
-    # Determine largest file (if any)
+    # Largest file
     largest_name = "N/A"
     largest_size = 0
     for r in rows:
         try:
             sz = int(r.get("size", 0) or 0)
-        except Exception:
+        except:
             sz = 0
         if sz > largest_size:
             largest_size = sz
             largest_name = r.get("name", "unknown")
 
-    # Build recently modified section with IST times
+    # Format sections (new / modified / deleted)
+    def format_section(items, label):
+        if not items:
+            return "    None"
+        return "\n".join([f"    - {i['name']} ({label} {i['timestamp']})" for i in items])
+
+    new_section = format_section(new_files, "created")
+    mod_section = format_section(modified_files, "modified")
+    del_section = format_section(deleted_files, "deleted")
+
+    # Recently modified files
     recent_lines = []
     for item in recent_items:
-        name = item.get("name", "<unknown>")
-        modified_raw = item.get("modified") or item.get("lastModifiedDateTime") or ""
-        modified_ist = utc_iso_to_ist(modified_raw)
+        name = item.get("name")
+        modified_ist = utc_iso_to_ist(item.get("modified"))
         recent_lines.append(f"    - {name} (modified {modified_ist})")
 
-    if not recent_lines:
-        recent_section = "    No recent modifications found."
-    else:
-        recent_section = "\n".join(recent_lines)
+    recent_section = "\n".join(recent_lines) if recent_lines else "    None"
 
     summary = f"""SharePoint Summary Report
 Generated: {now_ist}
@@ -99,6 +99,15 @@ Files: {file_count}
 
 Largest File:
     {largest_name} ({largest_size} bytes)
+
+New Files:
+{new_section}
+
+Modified Files:
+{mod_section}
+
+Deleted Files:
+{del_section}
 
 Recently Modified Files:
 {recent_section}
